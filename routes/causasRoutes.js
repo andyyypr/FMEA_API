@@ -3,7 +3,8 @@ const router = express.Router();
 const causasController = require("../controllers/causasController.js");
 
 router.get("/", causasController.getCausas);
-router.post("/", causasController.postIngresarCausa);
+// Crear una causa asociada a un efecto: id_efecto en la ruta
+router.post("/:id", causasController.postIngresarCausa);
 
 router
   .route("/:id")

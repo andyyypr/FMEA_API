@@ -26,23 +26,33 @@ class CausasController {
       }
     );
   }
-  getCausasAsociadaEfecto(req, res) {}
+
   postIngresarCausa(req, res) {
     try {
-      if (!req.body) {
-        return res.status(400).json({ error: "Body vacío o no enviado" });
-      }
+      // Ahora id_efecto se recibe en la ruta: POST /api/causas/:id
+      const { id } = req.params;
+      if (!id)
+        return res
+          .status(400)
+          .json({ error: "Se requiere id_efecto en la ruta" });
 
-      const { id_efecto, descripcion, ocurrencia, deteccion } = req.body;
+      const { descripcion, ocurrencia, deteccion } = req.body || {};
 
       // Validaciones básicas
       if (
-        id_efecto === undefined ||
         descripcion === undefined ||
         ocurrencia === undefined ||
         deteccion === undefined
       ) {
-        return res.status(400).json({ error: "Faltan parámetros requeridos" });
+        return res.status(400).json({
+          error:
+            "Faltan parámetros requeridos: descripcion, ocurrencia, deteccion",
+        });
+      }
+
+      const id_efecto = Number(id);
+      if (!Number.isInteger(id_efecto) || id_efecto <= 0) {
+        return res.status(400).json({ error: "id_efecto inválido en la ruta" });
       }
 
       const ocurr = Number(ocurrencia);
@@ -334,15 +344,23 @@ class CausasController {
         [id],
         (err, result) => {
           if (err) {
-            return res.status(400).send(err);
+            console.error("Error SQL:", err);
+            return res
+              .status(400)
+              .json({ error: "Error al eliminar la causa" });
           }
-          res.json({ message: "Causa eliminada correctamente" });
-          return res.status(204).send();
+
+          if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "Causa no encontrada" });
+          }
+
+          // ✅ Enviamos solo una respuesta
+          return res.json({ message: "Causa eliminada correctamente" });
         }
       );
     } catch (error) {
       console.error("Error al eliminar la causa:", error);
-      res.status(500).json({ error: "Error al eliminar la causa" });
+      return res.status(500).json({ error: "Error al eliminar la causa" });
     }
   }
 }

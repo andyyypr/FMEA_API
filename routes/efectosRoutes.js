@@ -3,7 +3,8 @@ const router = express.Router();
 const efectosController = require("../controllers/efectosControler.js");
 
 router.get("/", efectosController.getEfectos);
-router.post("/", efectosController.postIngresarEfecto);
+// Crear un efecto asociado a un modo: id del modo en la ruta
+router.post("/:id", efectosController.postIngresarEfecto);
 
 router
   .route("/:id")

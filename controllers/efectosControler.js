@@ -27,22 +27,55 @@ class EfectosController {
     );
   }
   postIngresarEfecto(req, res) {
-    const { id_modo, descripcion } = req.body;
+    // Ahora el id del modo se recibe en la ruta: POST /api/efectos/:id
+    const { id } = req.params;
+    const { descripcion } = req.body || {};
+
+    if (!id)
+      return res
+        .status(400)
+        .json({ error: "Se requiere id del modo en la ruta" });
+    if (!descripcion)
+      return res
+        .status(400)
+        .json({ error: "Falta campo 'descripcion' en el body" });
+
+    const idModoNum = Number(id);
+    if (!Number.isInteger(idModoNum) || idModoNum <= 0) {
+      return res.status(400).json({ error: "id de modo inválido" });
+    }
+
     try {
+      // Comprobar que el modo existe
       db.query(
-        "INSERT INTO efecto_falla (id_modo, descripcion) VALUES (?, ?)",
-        [id_modo, descripcion],
-        (err, result) => {
-          if (err) {
-            console.error("Error al insertar el efecto:", err);
-            return res
-              .status(500)
-              .json({ error: "Error al insertar el efecto" });
+        "SELECT id_modo FROM modo_falla WHERE id_modo = ?",
+        [idModoNum],
+        (errCheck, rows) => {
+          if (errCheck) {
+            console.error("Error al comprobar modo:", errCheck);
+            return res.status(500).json({ error: "Error al comprobar modo" });
           }
-          res.status(201).json({
-            message: "Efecto insertado correctamente",
-            id: result.insertId,
-          });
+          if (!rows || rows.length === 0) {
+            return res.status(404).json({ error: "Modo no encontrado" });
+          }
+
+          // Insertar el efecto asociado al modo
+          db.query(
+            "INSERT INTO efecto_falla (id_modo, descripcion) VALUES (?, ?)",
+            [idModoNum, descripcion],
+            (err, result) => {
+              if (err) {
+                console.error("Error al insertar el efecto:", err);
+                return res
+                  .status(500)
+                  .json({ error: "Error al insertar el efecto" });
+              }
+              res.status(201).json({
+                message: "Efecto insertado correctamente",
+                id: result.insertId,
+              });
+            }
+          );
         }
       );
     } catch (error) {
@@ -52,12 +85,18 @@ class EfectosController {
   }
   putActualizarEfecto(req, res) {
     const { id } = req.params;
-    const { id_modo, descripcion } = req.body;
+    const { descripcion } = req.body || {};
+
+    if (!descripcion) {
+      return res
+        .status(400)
+        .json({ error: "Falta campo 'descripcion' en el body" });
+    }
 
     try {
       db.query(
-        "UPDATE efecto_falla SET id_modo = ?, descripcion = ? WHERE id_efecto = ?",
-        [id_modo, descripcion, id],
+        "UPDATE efecto_falla SET descripcion = ? WHERE id_efecto = ?",
+        [descripcion, id],
         (err, result) => {
           if (err) {
             console.error("Error al actualizar el efecto:", err);
@@ -65,7 +104,15 @@ class EfectosController {
               .status(500)
               .json({ error: "Error al actualizar el efecto" });
           }
-          res.json({ message: "Efecto actualizado correctamente" });
+          // Opcional: comprobar affectedRows para 404
+          if (result && result.affectedRows === 0) {
+            return res.status(404).json({ error: "Efecto no encontrado" });
+          }
+          res.json({
+            message: "Efecto actualizado correctamente",
+            id,
+            descripcion,
+          });
         }
       );
     } catch (error) {
