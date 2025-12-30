@@ -486,6 +486,178 @@ class GeneralController {
       return res.status(500).json({ error: "Error al eliminar equipo" });
     }
   }
+
+  // Devuelve todos los modos con su NPR promedio
+  getModosNprPromedio(req, res) {
+    const sql = `
+      SELECT
+        m.id_modo,
+        m.nombre AS modo_nombre,
+        m.descripcion AS modo_descripcion,
+        m.gravedad,
+        m.id_equipo,
+        eq.nombre AS equipo_nombre,
+        ROUND(COALESCE(AVG(c.npr), 0)) AS npr_promedio,
+        COUNT(c.id_causa) AS causas_count
+      FROM modo_falla m
+      LEFT JOIN efecto_falla e ON e.id_modo = m.id_modo
+      LEFT JOIN causa_falla c ON c.id_efecto = e.id_efecto
+      LEFT JOIN equipo eq ON eq.id_equipo = m.id_equipo
+      GROUP BY m.id_modo, m.nombre, m.descripcion, m.gravedad, m.id_equipo, eq.nombre
+    `;
+
+    db.query(sql, (err, results) => {
+      if (err) {
+        console.error("Error al obtener modos con NPR promedio:", err);
+        return res.status(500).json({ error: "Error al obtener modos" });
+      }
+
+      // Normalizar nombres de campos en la respuesta si se desea
+      const mapped = (results || []).map((r) => ({
+        id_modo: r.id_modo,
+        nombre: r.modo_nombre,
+        descripcion: r.modo_descripcion,
+        gravedad: r.gravedad,
+        id_equipo: r.id_equipo,
+        equipo_nombre: r.equipo_nombre,
+        npr_promedio: Number(r.npr_promedio) || 0,
+        causas_count: Number(r.causas_count) || 0,
+      }));
+
+      return res.json(mapped);
+    });
+  }
+
+  // Devuelve estadísticas generales: npr_promedio, total de causas, causas críticas (npr > 200), y causa con npr máximo
+  // También inserta/actualiza el npr_promedio en el historial diario
+  getTablaEstadisticas(req, res) {
+    const sql = `
+      SELECT
+        ROUND(COALESCE(AVG(npr), 0)) AS npr_promedio,
+        COUNT(*) AS total_causas,
+        SUM(CASE WHEN npr > 200 THEN 1 ELSE 0 END) AS causas_criticas,
+        MAX(npr) AS npr_maximo
+      FROM causa_falla
+    `;
+
+    db.query(sql, (err, results) => {
+      if (err) {
+        console.error("Error al obtener estadísticas:", err);
+        return res.status(500).json({ error: "Error al obtener estadísticas" });
+      }
+
+      const stats = results[0] || {};
+      const nprPromedioActual = Number(stats.npr_promedio) || 0;
+
+      // Insertar/actualizar en historial_npr
+      const sqlHistorial = `
+        INSERT INTO historial_npr (fecha, npr_promedio)
+        VALUES (CURDATE(), ?)
+        ON DUPLICATE KEY UPDATE npr_promedio = VALUES(npr_promedio)
+      `;
+
+      db.query(sqlHistorial, [nprPromedioActual], (errHistorial) => {
+        if (errHistorial) {
+          console.error("Error al insertar en historial_npr:", errHistorial);
+          // Continuar sin fallar si el historial falla
+        }
+      });
+
+      // Ahora obtener la causa con NPR máximo
+      if (stats.npr_maximo === null) {
+        // Si no hay causas, devolver estadísticas con null
+        return res.json({
+          npr_promedio: nprPromedioActual,
+          total_causas: Number(stats.total_causas) || 0,
+          causas_criticas: Number(stats.causas_criticas) || 0,
+          causa_max_npr: null,
+        });
+      }
+
+      // Obtener la causa con npr_maximo
+      const sqlCausaMax = `
+        SELECT
+          c.id_causa,
+          c.descripcion,
+          c.ocurrencia,
+          c.deteccion,
+          c.npr,
+          c.fecha_ejecucion,
+          e.id_efecto,
+          e.descripcion AS efecto_descripcion,
+          m.id_modo,
+          m.nombre AS modo_nombre,
+          eq.id_equipo,
+          eq.nombre AS equipo_nombre
+        FROM causa_falla c
+        LEFT JOIN efecto_falla e ON c.id_efecto = e.id_efecto
+        LEFT JOIN modo_falla m ON e.id_modo = m.id_modo
+        LEFT JOIN equipo eq ON m.id_equipo = eq.id_equipo
+        WHERE c.npr = ?
+        LIMIT 1
+      `;
+
+      db.query(sqlCausaMax, [stats.npr_maximo], (err, causas) => {
+        if (err) {
+          console.error("Error al obtener causa con NPR máximo:", err);
+          return res
+            .status(500)
+            .json({ error: "Error al obtener causa con NPR máximo" });
+        }
+
+        const causaMax = causas && causas.length > 0 ? causas[0] : null;
+
+        return res.json({
+          npr_promedio: nprPromedioActual,
+          total_causas: Number(stats.total_causas) || 0,
+          causas_criticas: Number(stats.causas_criticas) || 0,
+          causa_max_npr: causaMax
+            ? {
+                id_causa: causaMax.id_causa,
+                descripcion: causaMax.descripcion,
+                ocurrencia: causaMax.ocurrencia,
+                deteccion: causaMax.deteccion,
+                npr: causaMax.npr,
+                fecha_ejecucion: causaMax.fecha_ejecucion,
+                id_efecto: causaMax.id_efecto,
+                efecto_descripcion: causaMax.efecto_descripcion,
+                id_modo: causaMax.id_modo,
+                modo_nombre: causaMax.modo_nombre,
+                id_equipo: causaMax.id_equipo,
+                equipo_nombre: causaMax.equipo_nombre,
+              }
+            : null,
+        });
+      });
+    });
+  }
+
+  // Devuelve el historial de npr_promedio por fecha
+  getHistorialNpr(req, res) {
+    const sql = `
+      SELECT 
+        DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha,
+        ROUND(npr_promedio, 2) AS npr_promedio
+      FROM historial_npr
+      ORDER BY fecha ASC
+    `;
+
+    db.query(sql, (err, results) => {
+      if (err) {
+        console.error("Error al obtener historial de NPR:", err);
+        return res
+          .status(500)
+          .json({ error: "Error al obtener historial de NPR" });
+      }
+
+      const historial = (results || []).map((r) => ({
+        fecha: r.fecha,
+        npr_promedio: Number(r.npr_promedio),
+      }));
+
+      return res.json({ historial });
+    });
+  }
 }
 
 module.exports = new GeneralController();

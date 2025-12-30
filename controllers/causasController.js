@@ -12,6 +12,98 @@ class CausasController {
       res.json(results);
     });
   }
+  // Devuelve las causas críticas (NPR >= 200) con contexto (efecto, modo, equipo)
+  getCausasCriticas(req, res) {
+    const sql = `
+      SELECT
+        c.id_causa,
+        c.descripcion AS causa_descripcion,
+        c.ocurrencia,
+        c.deteccion,
+        c.npr,
+        c.fecha_ejecucion,
+        e.id_efecto,
+        e.descripcion AS efecto_descripcion,
+        m.id_modo,
+        m.nombre AS modo_nombre,
+        m.gravedad,
+        eq.id_equipo,
+        eq.nombre AS equipo_nombre
+      FROM causa_falla c
+      LEFT JOIN efecto_falla e ON c.id_efecto = e.id_efecto
+      LEFT JOIN modo_falla m ON e.id_modo = m.id_modo
+      LEFT JOIN equipo eq ON m.id_equipo = eq.id_equipo
+      WHERE COALESCE(c.npr,0) >= 200
+      ORDER BY c.npr DESC, c.id_causa
+    `;
+
+    db.query(sql, (err, results) => {
+      if (err) {
+        console.error("Error al obtener causas críticas:", err);
+        return res
+          .status(500)
+          .json({ error: "Error al obtener causas críticas" });
+      }
+
+      const mapped = (results || []).map((r) => ({
+        id_causa: r.id_causa,
+        descripcion: r.causa_descripcion,
+        ocurrencia: r.ocurrencia,
+        deteccion: r.deteccion,
+        npr: Number(r.npr) || 0,
+        fecha_ejecucion: r.fecha_ejecucion,
+        id_efecto: r.id_efecto,
+        efecto_descripcion: r.efecto_descripcion,
+        id_modo: r.id_modo,
+        modo_nombre: r.modo_nombre,
+        gravedad: r.gravedad,
+        id_equipo: r.id_equipo,
+        equipo_nombre: r.equipo_nombre,
+      }));
+
+      return res.json(mapped);
+    });
+  }
+
+  // Devuelve solo los ids relacionados (id_efecto, id_modo, id_equipo) para una causa
+  getIdsByCausa(req, res) {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: "Se requiere id de causa" });
+
+    const id_causa = Number(id);
+    if (!Number.isInteger(id_causa) || id_causa <= 0) {
+      return res.status(400).json({ error: "id_causa inválido" });
+    }
+
+    const sql = `
+      SELECT c.id_efecto, e.id_modo, m.id_equipo
+      FROM causa_falla c
+      LEFT JOIN efecto_falla e ON c.id_efecto = e.id_efecto
+      LEFT JOIN modo_falla m ON e.id_modo = m.id_modo
+      WHERE c.id_causa = ?
+      LIMIT 1
+    `;
+
+    db.query(sql, [id_causa], (err, rows) => {
+      if (err) {
+        console.error("Error al consultar relaciones de la causa:", err);
+        return res
+          .status(500)
+          .json({ error: "Error al consultar relaciones de la causa" });
+      }
+
+      if (!rows || rows.length === 0) {
+        return res.status(404).json({ error: "Causa no encontrada" });
+      }
+
+      const row = rows[0];
+      return res.json({
+        id_efecto: row.id_efecto,
+        id_modo: row.id_modo,
+        id_equipo: row.id_equipo,
+      });
+    });
+  }
   getCausaByID(req, res) {
     const { id } = req.params;
     db.query(
@@ -26,33 +118,23 @@ class CausasController {
       }
     );
   }
-
+  getCausasAsociadaEfecto(req, res) {}
   postIngresarCausa(req, res) {
     try {
-      // Ahora id_efecto se recibe en la ruta: POST /api/causas/:id
-      const { id } = req.params;
-      if (!id)
-        return res
-          .status(400)
-          .json({ error: "Se requiere id_efecto en la ruta" });
+      if (!req.body) {
+        return res.status(400).json({ error: "Body vacío o no enviado" });
+      }
 
-      const { descripcion, ocurrencia, deteccion } = req.body || {};
+      const { id_efecto, descripcion, ocurrencia, deteccion } = req.body;
 
       // Validaciones básicas
       if (
+        id_efecto === undefined ||
         descripcion === undefined ||
         ocurrencia === undefined ||
         deteccion === undefined
       ) {
-        return res.status(400).json({
-          error:
-            "Faltan parámetros requeridos: descripcion, ocurrencia, deteccion",
-        });
-      }
-
-      const id_efecto = Number(id);
-      if (!Number.isInteger(id_efecto) || id_efecto <= 0) {
-        return res.status(400).json({ error: "id_efecto inválido en la ruta" });
+        return res.status(400).json({ error: "Faltan parámetros requeridos" });
       }
 
       const ocurr = Number(ocurrencia);
@@ -344,23 +426,15 @@ class CausasController {
         [id],
         (err, result) => {
           if (err) {
-            console.error("Error SQL:", err);
-            return res
-              .status(400)
-              .json({ error: "Error al eliminar la causa" });
+            return res.status(400).send(err);
           }
-
-          if (result.affectedRows === 0) {
-            return res.status(404).json({ message: "Causa no encontrada" });
-          }
-
-          // ✅ Enviamos solo una respuesta
-          return res.json({ message: "Causa eliminada correctamente" });
+          res.json({ message: "Causa eliminada correctamente" });
+          return res.status(204).send();
         }
       );
     } catch (error) {
       console.error("Error al eliminar la causa:", error);
-      return res.status(500).json({ error: "Error al eliminar la causa" });
+      res.status(500).json({ error: "Error al eliminar la causa" });
     }
   }
 }

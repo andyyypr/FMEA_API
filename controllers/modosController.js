@@ -112,6 +112,98 @@ class ModosController {
       return res.status(500).json({ error: err.message });
     }
   }
+  getIteracionDesfavorable(req, res) {
+    // 1) Encontrar el modo con el mayor NPR promedio (considerando causas)
+    const querySql = `
+      SELECT
+        m.id_modo, m.nombre AS modo_nombre, m.descripcion AS modo_descripcion, m.gravedad, m.responsables,
+        ROUND(AVG(c.npr)) AS npr_promedio
+      FROM modo_falla m
+      LEFT JOIN efecto_falla e ON e.id_modo = m.id_modo
+      LEFT JOIN causa_falla c ON c.id_efecto = e.id_efecto
+      GROUP BY m.id_modo, m.nombre, m.descripcion, m.gravedad, m.responsables
+      ORDER BY npr_promedio DESC
+      LIMIT 1
+    `;
+
+    db.query(querySql, (err, modoRows) => {
+      if (err) {
+        console.error("Error al buscar modo desfavorable:", err);
+        return res
+          .status(500)
+          .json({ error: "Error al buscar modo desfavorable" });
+      }
+
+      if (!modoRows || modoRows.length === 0) {
+        return res.status(404).json({ error: "No se encontraron modos" });
+      }
+
+      const modo = modoRows[0];
+      const id_modo = modo.id_modo;
+
+      // 2) Obtener efectos y causas del modo
+      const queryDetalle = `
+        SELECT
+          e.id_efecto, e.descripcion AS efecto_descripcion,
+          c.id_causa, c.descripcion AS causa_descripcion, c.ocurrencia, c.deteccion, c.npr, c.fecha_ejecucion
+        FROM efecto_falla e
+        LEFT JOIN causa_falla c ON c.id_efecto = e.id_efecto
+        WHERE e.id_modo = ?
+        ORDER BY e.id_efecto, c.id_causa
+      `;
+
+      db.query(queryDetalle, [id_modo], (err2, detalleRows) => {
+        if (err2) {
+          console.error("Error al obtener detalles del modo:", err2);
+          return res
+            .status(500)
+            .json({ error: "Error al obtener detalles del modo" });
+        }
+
+        // Construir la estructura: modo -> efectos[] -> causas[]
+        const efectosMap = new Map();
+
+        (detalleRows || []).forEach((row) => {
+          if (row.id_efecto == null) return;
+
+          if (!efectosMap.has(row.id_efecto)) {
+            efectosMap.set(row.id_efecto, {
+              id_efecto: row.id_efecto,
+              descripcion: row.efecto_descripcion,
+              causas: [],
+            });
+          }
+
+          const efecto = efectosMap.get(row.id_efecto);
+
+          if (row.id_causa != null) {
+            efecto.causas.push({
+              id_causa: row.id_causa,
+              descripcion: row.causa_descripcion,
+              ocurrencia: row.ocurrencia,
+              deteccion: row.deteccion,
+              npr: row.npr,
+              fecha_ejecucion: row.fecha_ejecucion,
+            });
+          }
+        });
+
+        const efectos = Array.from(efectosMap.values());
+
+        return res.json({
+          modo: {
+            id_modo: modo.id_modo,
+            nombre: modo.modo_nombre,
+            descripcion: modo.modo_descripcion,
+            gravedad: modo.gravedad,
+            responsables: modo.responsables,
+            npr_promedio: modo.npr_promedio,
+          },
+          efectos,
+        });
+      });
+    });
+  }
   postIngresarModo(req, res) {
     try {
       if (!req.body || Object.keys(req.body).length === 0) {
